@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "service-chat-scraper"
+version = "0.1.0"
+description = "Authenticated Scrapy scraper for Service chat messages"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "cryptography>=43,<51",
+    "Scrapy>=2.11,<3",
+    "scrapy-playwright>=0.0.43,<1",
+    "uvicorn[standard]>=0.30,<1",
+]
+
+[tool.setuptools.packages.find]
+include = ["service_scraper*", "service_api*"]

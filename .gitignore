@@ -1,0 +1,25 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.scrapy/
+.env
+.env.*
+!.env.example
+state/
+data/
+artifacts/
+.idea/
+*.iml
+
+# Local databases, SQLite journal files and runtime logs.
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+*.log
+
+# Tool caches.
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
