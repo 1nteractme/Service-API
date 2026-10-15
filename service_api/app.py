@@ -36,11 +36,13 @@ session_cipher = SessionCipher(
     settings.session_encryption_secret,
 )
 authenticator = ServiceBrowserAuthenticator(
+    service_base_url=settings.service_base_url,
     headless=settings.service_headless,
     test_mode=settings.test_mode,
     test_sms_code=settings.test_sms_code,
 )
 scraper = ServiceChatScraper(
+    service_base_url=settings.service_base_url,
     fixture_path=settings.sync_fixture_path,
     sync_timeout_seconds=settings.sync_timeout_seconds,
     chat_amount_limit=settings.chat_amount_limit,
@@ -114,6 +116,11 @@ class ChatMessagesResponse(BaseModel):
 class SyncStartResponse(BaseModel):
     status: str
     sync_run_id: int | None = None
+
+
+class SyncRequest(BaseModel):
+    chat_amount_limit: int | None = Field(default=None, ge=0)
+    message_amount_limit: int | None = Field(default=None, ge=0)
 
 
 class SyncStatusResponse(BaseModel):
@@ -296,8 +303,17 @@ async def list_chat_messages(
 
 
 @app.post("/sync", response_model=SyncStartResponse)
-async def start_sync(auth: Auth) -> SyncStartResponse | JSONResponse:
-    sync_status, sync_run_id = await sync_service.start(auth.user["id"])
+async def start_sync(
+    auth: Auth,
+    payload: SyncRequest | None = None,
+) -> SyncStartResponse | JSONResponse:
+    sync_status, sync_run_id = await sync_service.start(
+        auth.user["id"],
+        chat_amount_limit=payload.chat_amount_limit if payload else None,
+        message_amount_limit=(
+            payload.message_amount_limit if payload else None
+        ),
+    )
     if sync_status != "started":
         return JSONResponse(status_code=409, content={"status": sync_status})
     return SyncStartResponse(status=sync_status, sync_run_id=sync_run_id)

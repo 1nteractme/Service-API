@@ -15,7 +15,6 @@ from .service import (
     ServiceChatScraper,
     ServiceSessionExpired,
     ServiceSyncError,
-    normalize_phone,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,10 +56,10 @@ class AuthService:
         self.settings = settings
 
     async def request_code(self, raw_phone: str) -> str:
-        try:
-            phone = normalize_phone(raw_phone)
-        except ValueError as exc:
-            raise InvalidChallengeError(str(exc)) from exc
+        if not raw_phone.strip():
+            raise InvalidChallengeError("Некорректный номер телефона")
+        # Номер сохраняется и передается во внешний сервис без преобразований.
+        phone = raw_phone
 
         since = datetime.now(UTC) - timedelta(minutes=10)
         recent = await asyncio.to_thread(
@@ -68,7 +67,8 @@ class AuthService:
             phone,
             since.isoformat(),
         )
-        if recent >= self.settings.auth_requests_per_10_minutes:
+        request_limit = self.settings.auth_requests_per_10_minutes
+        if request_limit > 0 and recent >= request_limit:
             raise RateLimitError(
                 "Слишком много запросов SMS-кода"
             )
@@ -209,7 +209,13 @@ class SyncService:
         self.scraper = scraper
         self._tasks: dict[int, asyncio.Task[None]] = {}
 
-    async def start(self, user_id: int) -> tuple[str, int | None]:
+    async def start(
+        self,
+        user_id: int,
+        *,
+        chat_amount_limit: int | None = None,
+        message_amount_limit: int | None = None,
+    ) -> tuple[str, int | None]:
         session = await asyncio.to_thread(self.database.get_session, user_id)
         if not session or session["status"] != "active":
             return "reauth_required", None
@@ -219,7 +225,14 @@ class SyncService:
             return "already_running", None
 
         run_id = await asyncio.to_thread(self.database.create_sync_run, user_id)
-        self._tasks[user_id] = asyncio.create_task(self._run(user_id, run_id))
+        self._tasks[user_id] = asyncio.create_task(
+            self._run(
+                user_id,
+                run_id,
+                chat_amount_limit=chat_amount_limit,
+                message_amount_limit=message_amount_limit,
+            )
+        )
         return "started", run_id
 
     async def shutdown(self) -> None:
@@ -229,7 +242,14 @@ class SyncService:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def _run(self, user_id: int, run_id: int) -> None:
+    async def _run(
+        self,
+        user_id: int,
+        run_id: int,
+        *,
+        chat_amount_limit: int | None,
+        message_amount_limit: int | None,
+    ) -> None:
         try:
             session = await asyncio.to_thread(self.database.get_session, user_id)
             if not session or session["status"] != "active":
@@ -237,7 +257,12 @@ class SyncService:
                 return
 
             state = self.cipher.decrypt(session["encrypted_session"])
-            chats = await asyncio.to_thread(self.scraper.sync, state)
+            chats = await asyncio.to_thread(
+                self.scraper.sync,
+                state,
+                chat_amount_limit=chat_amount_limit,
+                message_amount_limit=message_amount_limit,
+            )
             chats_processed, messages_added = await asyncio.to_thread(
                 self.database.upsert_chat_bundle,
                 user_id,

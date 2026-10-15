@@ -29,6 +29,7 @@ def main() -> None:
         settings.session_encryption_secret,
     ).decrypt(session["encrypted_session"])
     chats = ServiceChatScraper(
+        service_base_url=settings.service_base_url,
         fixture_path=settings.sync_fixture_path,
         sync_timeout_seconds=settings.sync_timeout_seconds,
         chat_amount_limit=settings.chat_amount_limit,

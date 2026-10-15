@@ -6,6 +6,7 @@ import re
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 import scrapy
 from scrapy.exceptions import CloseSpider
@@ -14,10 +15,6 @@ from scrapy.http import Response
 
 class ServiceChatSpider(scrapy.Spider):
     name = "service_chat"
-    allowed_domains = ["tetrika-school.ru"]
-
-    login_url = "https://tetrika-school.ru/auth/login"
-    chat_url = "https://tetrika-school.ru/lk/chat"
 
     default_message_selector = (
         "[class^='message_']"
@@ -25,10 +22,23 @@ class ServiceChatSpider(scrapy.Spider):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.service_base_url = os.getenv("SERVICE_BASE_URL", "").strip().rstrip("/")
+        parsed_base_url = urlparse(self.service_base_url)
+        if (
+            parsed_base_url.scheme not in {"http", "https"}
+            or not parsed_base_url.netloc
+            or not parsed_base_url.hostname
+        ):
+            raise CloseSpider(
+                "SERVICE_BASE_URL must be an absolute HTTP(S) URL."
+            )
+        self.allowed_domains = [parsed_base_url.hostname]
+        self.login_url = f"{self.service_base_url}/auth/login"
+        self.chat_url = f"{self.service_base_url}/lk/chat"
         self.phone = os.getenv("SERVICE_PHONE")
         self.sms_code = os.getenv("SERVICE_SMS_CODE")
         self.storage_state = Path(
-            os.getenv("SERVICE_STORAGE_STATE", "state/tetrika.json")
+            os.getenv("SERVICE_STORAGE_STATE", "state/service.json")
         )
         self.message_selector = os.getenv(
             "SERVICE_MESSAGE_SELECTOR", self.default_message_selector
@@ -639,12 +649,16 @@ EXTRACT_MESSAGES_SCRIPT = r"""
             name.startsWith(prefix)
         );
     const rootSelector = selector || "[class^='message_']";
-    const roots = Array.from(document.querySelectorAll(rootSelector)).filter(
-        (element) =>
-            hasClassPrefix(element, "message_") &&
-            !hasClassPrefix(element, "message-wrap_") &&
-            !hasClassPrefix(element, "message-text_")
-    );
+    // The chat DOM is ordered from the oldest message to the newest one.
+    // Reverse it before applying the limit so we always collect recent data.
+    const roots = Array.from(document.querySelectorAll(rootSelector))
+        .filter(
+            (element) =>
+                hasClassPrefix(element, "message_") &&
+                !hasClassPrefix(element, "message-wrap_") &&
+                !hasClassPrefix(element, "message-text_")
+        )
+        .reverse();
     const chatSection = document.querySelector("section[class^='chat_']");
     const chatHeaderName = chatSection?.querySelector("[class^='name_']");
     const peerName = textOf(chatHeaderName) || null;

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
@@ -28,6 +29,7 @@ class Settings:
     challenge_ttl_seconds: int
     auth_max_attempts: int
     api_token_ttl_seconds: int
+    service_base_url: str
     service_headless: bool
     sync_timeout_seconds: int
     chat_amount_limit: int
@@ -47,9 +49,18 @@ class Settings:
             raise ValueError(
                 "SERVICE_TEST_MODE cannot be enabled in production"
             )
+        service_base_url = os.getenv("SERVICE_BASE_URL", "").strip().rstrip("/")
+        parsed_base_url = urlparse(service_base_url)
+        if (
+            parsed_base_url.scheme not in {"http", "https"}
+            or not parsed_base_url.netloc
+        ):
+            raise ValueError(
+                "SERVICE_BASE_URL must be an absolute HTTP(S) URL"
+            )
         return cls(
             database_path=Path(
-                os.getenv("SERVICE_DB_PATH", "data/tetrika.sqlite3")
+                os.getenv("SERVICE_DB_PATH", "data/service.sqlite3")
             ),
             session_encryption_key=os.getenv(
                 "SERVICE_SESSION_ENCRYPTION_KEY"
@@ -58,7 +69,7 @@ class Settings:
                 "SERVICE_SESSION_ENCRYPTION_SECRET"
             ),
             auth_requests_per_10_minutes=_env_int(
-                "SERVICE_AUTH_REQUESTS_PER_10_MINUTES", 3
+                "SERVICE_AUTH_REQUESTS_PER_10_MINUTES", 3, minimum=0
             ),
             challenge_ttl_seconds=_env_int(
                 "SERVICE_AUTH_CHALLENGE_TTL_SECONDS", 300
@@ -67,6 +78,7 @@ class Settings:
             api_token_ttl_seconds=_env_int(
                 "SERVICE_API_TOKEN_TTL_SECONDS", 30 * 24 * 60 * 60
             ),
+            service_base_url=service_base_url,
             service_headless=os.getenv("SERVICE_HEADLESS", "1") != "0",
             sync_timeout_seconds=_env_int("SERVICE_SYNC_TIMEOUT_SECONDS", 300),
             chat_amount_limit=_env_int("CHAT_AMOUNT_LIMIT", 20, minimum=0),

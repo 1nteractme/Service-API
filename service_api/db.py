@@ -27,7 +27,6 @@ class Database:
     def init(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
-            self._migrate_session_table(connection)
             connection.executescript(
                 """
                 PRAGMA journal_mode = WAL;
@@ -121,28 +120,6 @@ class Database:
                 """
             )
             self._migrate_api_token_expiry(connection)
-
-    @staticmethod
-    def _migrate_session_table(connection: sqlite3.Connection) -> None:
-        """Rename the pre-Service session table without dropping its data."""
-        tables = {
-            row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master "
-                "WHERE type = 'table' AND name IN (?, ?) ",
-                ("tetrika_sessions", "service_sessions"),
-            )
-        }
-        if "tetrika_sessions" not in tables:
-            return
-        if "service_sessions" in tables:
-            raise RuntimeError(
-                "Both legacy tetrika_sessions and service_sessions exist; "
-                "merge them manually before starting the API"
-            )
-        connection.execute(
-            "ALTER TABLE tetrika_sessions RENAME TO service_sessions"
-        )
 
     def _migrate_api_token_expiry(self, connection: sqlite3.Connection) -> None:
         """Add expiry to databases created before token TTL was introduced."""
@@ -469,7 +446,7 @@ class Database:
                         str(chat["chat_id"]),
                         int(chat.get("chat_index", 0)),
                         str(chat.get("chat_name") or "Без названия"),
-                        str(chat.get("source") or "https://tetrika-school.ru/lk/chat"),
+                        str(chat.get("source") or "configured-service"),
                         last_message_at,
                         now,
                         now,

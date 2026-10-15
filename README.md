@@ -8,8 +8,8 @@
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e .
-playwright install chromium
-cp .env.example .env
+python -m playwright install chromium
+if [ ! -f .env ]; then cp .env.example .env; else echo ".env уже существует, оставляем без изменений"; fi
 ```
 
 ---
@@ -68,7 +68,8 @@ curl http://127.0.0.1:8000/health
 
 ```env
     SERVICE_ENV=production
-    SERVICE_DB_PATH=/app/data/tetrika.sqlite3
+    SERVICE_DB_PATH=/app/data/service.sqlite3
+    SERVICE_BASE_URL=https://service.example.com
     SERVICE_SESSION_ENCRYPTION_KEY=<стабильный-Fernet-ключ>
     SERVICE_HEADLESS=1
     SERVICE_SYNC_TIMEOUT_SECONDS=300
@@ -88,11 +89,12 @@ curl http://127.0.0.1:8000/health
 | --- | --- |
 | `SERVICE_ENV` | Режим запуска приложения. `production` включает production-проверки. |
 | `SERVICE_DB_PATH` | Путь к SQLite-базе внутри контейнера. Каталог `/app/data` подключён к Volume. |
+| `SERVICE_BASE_URL` | Базовый HTTPS-адрес внешнего сервиса для авторизации и синхронизации. |
 | `SERVICE_SESSION_ENCRYPTION_KEY` | Секретный Fernet-ключ для шифрования сессий Service. |
 | `SERVICE_HEADLESS` | Запуск браузера без графического окна. Значение `1` нужно для Railway. |
 | `SERVICE_SYNC_TIMEOUT_SECONDS` | Максимальная длительность одной синхронизации в секундах. |
 | `SERVICE_AUTH_CHALLENGE_TTL_SECONDS` | Срок действия запроса SMS-кода в секундах. |
-| `SERVICE_AUTH_REQUESTS_PER_10_MINUTES` | Максимальное количество запросов SMS-кода за 10 минут для одного номера. |
+| `SERVICE_AUTH_REQUESTS_PER_10_MINUTES` | Максимальное количество запросов SMS-кода за 10 минут для одного номера. `0` отключает ограничение. |
 | `SERVICE_AUTH_MAX_ATTEMPTS` | Максимальное количество попыток ввода SMS-кода. |
 | `SERVICE_API_TOKEN_TTL_SECONDS` | Срок жизни Bearer-токена в секундах. По умолчанию 30 дней. |
 | `SERVICE_TIMEZONE` | Часовой пояс для преобразования дат сообщений. |
@@ -111,9 +113,6 @@ curl http://127.0.0.1:8000/health
 
 Volume нужен для сохранения SQLite после деплоя. Используйте одну реплику и
 один worker.
-
-При первом запуске на существующей базе таблица `tetrika_sessions` автоматически
-переименовывается в `service_sessions` без удаления записей.
 
 ---
 
@@ -140,7 +139,7 @@ curl https://<railway-домен>/health
 | `GET` | `/me` | Текущий пользователь |
 | `GET` | `/chats` | Список чатов |
 | `GET` | `/chats/{chat_id}/messages` | Сообщения чата |
-| `POST` | `/sync` | Запустить синхронизацию |
+| `POST` | `/sync` | Запустить синхронизацию с лимитами из JSON-тела |
 | `GET` | `/sync/status` | Статус синхронизации |
 | `POST` | `/auth/logout` | Отозвать текущий токен |
 
@@ -153,6 +152,18 @@ Authorization: Bearer <access_token>
 Параметр `limit` у `/chats` и `/chats/{chat_id}/messages` ограничивается
 переменными `CHAT_AMOUNT_LIMIT` и `MESSAGE_AMOUNT_LIMIT`. Значение `0`
 отключает ограничение, если `limit` не передан в запросе.
+
+Для запуска синхронизации приложение может передать лимиты в JSON-теле:
+
+```json
+{
+  "chat_amount_limit": 20,
+  "message_amount_limit": 50
+}
+```
+
+Оба поля необязательны. Если поле не передано, используется значение из
+окружения. Значение `0` загружает все чаты или все сообщения в каждом чате.
 
 ## Коды ошибок
 

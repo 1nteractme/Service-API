@@ -25,15 +25,6 @@ class ServiceSyncError(RuntimeError):
     pass
 
 
-def normalize_phone(phone: str) -> str:
-    digits = re.sub(r"\D", "", phone)
-    if len(digits) == 11 and digits[0] in {"7", "8"}:
-        digits = digits[1:]
-    if not 10 <= len(digits) <= 15:
-        raise ValueError("Некорректный номер телефона")
-    return "+7" + digits if len(digits) == 10 else "+" + digits
-
-
 def _parse_date(value: str | None, timezone: ZoneInfo | None = None) -> str | None:
     if not value:
         return None
@@ -112,16 +103,17 @@ def _parse_date(value: str | None, timezone: ZoneInfo | None = None) -> str | No
 class ServiceBrowserAuthenticator:
     """Keeps the short-lived browser context between the two auth requests."""
 
-    login_url = "https://tetrika-school.ru/auth/login"
-
     def __init__(
         self,
         *,
+        service_base_url: str,
         headless: bool | None = None,
         test_mode: bool | None = None,
         test_sms_code: str | None = None,
     ) -> None:
         self._pending: dict[str, dict] = {}
+        self.service_base_url = service_base_url.rstrip("/")
+        self.login_url = f"{self.service_base_url}/auth/login"
         self.headless = (
             headless
             if headless is not None
@@ -160,11 +152,11 @@ class ServiceBrowserAuthenticator:
                 timeout=60_000,
             )
             await self._fill_first(page, self._phone_selectors(), phone)
-            await self._click_first_button(
-                page,
-                ["Войти", "Получить код", "Продолжить"],
-            )
+            await self._request_sms_code(page)
             await self._wait_for_code_inputs(page)
+        except ServiceAuthError:
+            await self._close_resources(playwright, browser, context)
+            raise
         except Exception as exc:
             await self._close_resources(playwright, browser, context)
             raise ServiceAuthError(
@@ -177,6 +169,39 @@ class ServiceBrowserAuthenticator:
             "page": page,
             "phone": phone,
         }
+
+    async def _request_sms_code(self, page) -> None:
+        """Submit the phone form and wait for the site's SMS request."""
+        try:
+            async with page.expect_response(
+                lambda response: "/api/v1/auth/sms_confirmation/"
+                in response.url,
+                timeout=30_000,
+            ) as response_info:
+                await self._click_first_button(
+                    page,
+                    ["Войти", "Получить код", "Продолжить"],
+                )
+
+            response = await response_info.value
+            if response.ok:
+                return
+
+            try:
+                detail = (await response.text()).strip()[:300]
+            except Exception:
+                detail = ""
+            suffix = f": {detail}" if detail else ""
+            raise ServiceAuthError(
+                "Внешний сервис отклонил запрос SMS "
+                f"(HTTP {response.status}){suffix}"
+            )
+        except ServiceAuthError:
+            raise
+        except Exception as exc:
+            raise ServiceAuthError(
+                "Не удалось дождаться запроса отправки SMS"
+            ) from exc
 
     async def verify_code(self, challenge_id: str, code: str) -> dict:
         pending = self._pending.get(challenge_id)
@@ -307,6 +332,7 @@ class ServiceChatScraper:
         self,
         project_root: str | Path | None = None,
         *,
+        service_base_url: str | None = None,
         fixture_path: str | Path | None = None,
         sync_timeout_seconds: int | None = None,
         chat_amount_limit: int | None = None,
@@ -314,6 +340,12 @@ class ServiceChatScraper:
         timezone: str | None = None,
     ) -> None:
         self.project_root = Path(project_root or Path(__file__).parents[1])
+        self.service_base_url = (
+            service_base_url or os.getenv("SERVICE_BASE_URL", "")
+        ).strip().rstrip("/")
+        if not self.service_base_url:
+            raise ValueError("SERVICE_BASE_URL is required")
+        self.chat_url = f"{self.service_base_url}/lk/chat"
         configured_fixture = fixture_path or os.getenv(
             "SERVICE_SYNC_FIXTURE_PATH", ""
         )
@@ -339,13 +371,35 @@ class ServiceChatScraper:
             timezone or os.getenv("SERVICE_TIMEZONE", "Europe/Moscow")
         )
 
-    def sync(self, session: dict) -> list[dict]:
+    def sync(
+        self,
+        session: dict,
+        *,
+        chat_amount_limit: int | None = None,
+        message_amount_limit: int | None = None,
+    ) -> list[dict]:
+        chat_limit = (
+            self.chat_amount_limit
+            if chat_amount_limit is None
+            else chat_amount_limit
+        )
+        message_limit = (
+            self.message_amount_limit
+            if message_amount_limit is None
+            else message_amount_limit
+        )
+        if chat_limit < 0:
+            raise ValueError("chat_amount_limit must be non-negative")
+        if message_limit < 0:
+            raise ValueError("message_amount_limit must be non-negative")
+
         if self.fixture_path:
             return self._load_payloads(
                 self.fixture_path,
                 self.timezone,
-                chat_limit=self.chat_amount_limit,
-                message_limit=self.message_amount_limit,
+                chat_limit=chat_limit,
+                message_limit=message_limit,
+                source_default=self.chat_url,
             )
 
         with tempfile.TemporaryDirectory(prefix="service-sync-") as directory:
@@ -363,8 +417,8 @@ class ServiceChatScraper:
             environment.update(
                 {
                     "SERVICE_STORAGE_STATE": str(state_path),
-                    "CHAT_AMOUNT_LIMIT": str(self.chat_amount_limit),
-                    "MESSAGE_AMOUNT_LIMIT": str(self.message_amount_limit),
+                    "CHAT_AMOUNT_LIMIT": str(chat_limit),
+                    "MESSAGE_AMOUNT_LIMIT": str(message_limit),
                     "SERVICE_HEADLESS": "1",
                 }
             )
@@ -403,8 +457,9 @@ class ServiceChatScraper:
             return self._load_payloads(
                 output_path,
                 self.timezone,
-                chat_limit=self.chat_amount_limit,
-                message_limit=self.message_amount_limit,
+                chat_limit=chat_limit,
+                message_limit=message_limit,
+                source_default=self.chat_url,
             )
 
     @staticmethod
@@ -425,6 +480,7 @@ class ServiceChatScraper:
         *,
         chat_limit: int = 0,
         message_limit: int = 0,
+        source_default: str = "",
     ) -> list[dict]:
         if not path.is_file():
             raise ServiceSyncError(
@@ -459,6 +515,7 @@ class ServiceChatScraper:
                 payload,
                 timezone,
                 message_limit=message_limit,
+                source_default=source_default,
             )
             for payload in payloads
             if isinstance(payload, dict)
@@ -470,9 +527,10 @@ class ServiceChatScraper:
         timezone: ZoneInfo | None = None,
         *,
         message_limit: int = 0,
+        source_default: str = "",
     ) -> dict:
         name = str(payload.get("chat_name") or "Без названия")
-        source = str(payload.get("source") or "https://tetrika-school.ru/lk/chat")
+        source = str(payload.get("source") or source_default)
         generated_chat_id = hashlib.sha256(
             f"{source}|{name}".encode()
         ).hexdigest()[:20]
