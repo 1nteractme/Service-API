@@ -216,5 +216,6 @@ Authorization: Bearer <access_token>
 - `service_api/` — FastAPI, авторизация, база и синхронизация;
 - `service_scraper/` — Scrapy spider;
 - `Dockerfile` — production-образ с Chromium;
+- `compose.yaml` — production-запуск на собственной VM;
 - `railway.toml` — настройки сборки и health-check;
 - `.env.example` — пример переменных окружения.

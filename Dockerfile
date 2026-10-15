@@ -6,7 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Install the application first so Railway can build a self-contained image.
+# Install the application first so the image is self-contained.
 COPY pyproject.toml README.md ./
 COPY service_api ./service_api
 COPY service_scraper ./service_scraper
@@ -18,5 +18,5 @@ RUN pip install . \
 
 EXPOSE 8000
 
-# Railway provides PORT at runtime. The fallback keeps the image convenient locally.
+# Use PORT when the hosting platform provides it; keep 8000 as the local default.
 CMD ["sh", "-c", "uvicorn service_api.app:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"]
