@@ -1,7 +1,5 @@
 # Service API
 
----
-
 ### Локальный запуск
 
 ```bash
@@ -50,21 +48,35 @@ curl http://127.0.0.1:8000/health
 ```
 
 
-## Railway Setup
+## VPS Setup
 
----
+### 1. Создать сервер
 
-### 1. Создать сервис
+Используйте Ubuntu 24.04, минимум 2 CPU, 4 ГБ RAM, 40 ГБ SSD/NVMe и
+публичный IPv4. Для проекта нужен root-доступ или SSH-доступ с правами
+установки Docker.
 
-    1. Загрузите проект в GitHub.
-    2. В Railway выберите `New Project` -> `Deploy from GitHub repo`.
-    3. Выберите репозиторий. Railway использует `Dockerfile` и `railway.toml`.
+Загрузите проект в GitHub, подключитесь к серверу и выполните:
 
----
+```bash
+mkdir -p /opt/service-api
+cd /opt
+git clone https://github.com/<your_name>/<repository_name>.git service-api
+cd /opt/service-api
+mkdir -p data
+cp .env.example .env
+chmod 600 .env
+```
 
 ### 2. Добавить переменные
 
-В Railway откройте `Variables` и добавьте:
+Откройте production-конфигурацию:
+
+```bash
+nano /opt/service-api/.env
+```
+
+Укажите:
 
 ```env
     SERVICE_ENV=production
@@ -91,7 +103,7 @@ curl http://127.0.0.1:8000/health
 | `SERVICE_DB_PATH` | Путь к SQLite-базе внутри контейнера. Каталог `/app/data` подключён к Volume. |
 | `SERVICE_BASE_URL` | Базовый HTTPS-адрес внешнего сервиса для авторизации и синхронизации. |
 | `SERVICE_SESSION_ENCRYPTION_KEY` | Секретный Fernet-ключ для шифрования сессий Service. |
-| `SERVICE_HEADLESS` | Запуск браузера без графического окна. Значение `1` нужно для Railway. |
+| `SERVICE_HEADLESS` | Запуск браузера без графического окна. Для Docker укажите `1`. |
 | `SERVICE_SYNC_TIMEOUT_SECONDS` | Максимальная длительность одной синхронизации в секундах. |
 | `SERVICE_AUTH_CHALLENGE_TTL_SECONDS` | Срок действия запроса SMS-кода в секундах. |
 | `SERVICE_AUTH_REQUESTS_PER_10_MINUTES` | Максимальное количество запросов SMS-кода за 10 минут для одного номера. `0` отключает ограничение. |
@@ -103,31 +115,46 @@ curl http://127.0.0.1:8000/health
 | `SERVICE_SQLITE_TIMEOUT_SECONDS` | Максимальное время ожидания освобождения SQLite-блокировки в секундах. |
 
 
-### 3. Подключение Volume
+Каталог `./data` монтируется в контейнер как `/app/data`, поэтому SQLite
+сохраняется после перезапуска контейнера.
 
-Добавьте Railway Volume и укажите путь монтирования:
-
-```text
-/app/data
-```
-
-Volume нужен для сохранения SQLite после деплоя. Используйте одну реплику и
-один worker.
-
----
-
-### 4. Проверка API
-
-После деплоя Railway выдаст HTTPS-домен:
+### 3. Запуск API
 
 ```bash
-curl https://<railway-домен>/health
+apt update
+apt install -y docker.io docker-compose-v2 nginx ufw
+systemctl enable --now docker
+
+cd /opt/service-api
+docker compose up -d --build
+docker compose ps
+curl -fsS http://127.0.0.1:8000/health
 ```
 
-Приложение автоматически слушает `0.0.0.0:$PORT`. Текущая конфигурация
-запускает один Uvicorn worker, потому что challenge входа хранится в памяти.
+Для автоматической настройки используйте `scripts/setup-server.sh`. Он
+устанавливает Docker, Nginx и UFW, клонирует или обновляет репозиторий,
+проверяет `.env`, запускает Compose и публикует API через Nginx.
 
----
+Запуск без домена, только по IP:
+
+```bash
+SERVICE_BASE_URL=https://external.example \
+  bash scripts/setup-server.sh
+```
+
+Запуск с доменом и HTTPS. До запуска добавьте DNS-запись `A` на IP сервера:
+
+```bash
+SERVICE_BASE_URL=https://external.example \
+DOMAIN=api.example.com \
+ENABLE_TLS=1 \
+CERTBOT_EMAIL=admin@example.com \
+  bash scripts/setup-server.sh
+```
+
+Скрипт не перезаписывает существующий `.env` и не меняет существующий
+`SERVICE_SESSION_ENCRYPTION_KEY`.
+
 
 ## Endpoints
 
@@ -209,13 +236,10 @@ Authorization: Bearer <access_token>
 }
 ```
 
----
-
 ## Структура
 
 - `service_api/` — FastAPI, авторизация, база и синхронизация;
 - `service_scraper/` — Scrapy spider;
 - `Dockerfile` — production-образ с Chromium;
 - `compose.yaml` — production-запуск на собственной VM;
-- `railway.toml` — настройки сборки и health-check;
 - `.env.example` — пример переменных окружения.
